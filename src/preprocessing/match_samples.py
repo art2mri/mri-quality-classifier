@@ -54,8 +54,8 @@ def create_matched_dataset(
 
     if number_to_sample < number_useful:
         print((
-            "[WARNING] Not enough eligible useful samples. "
-            "Using all eligible useful samples instead."
+            "[WARNING] Not enough useful samples. Using all eligible useful "
+            "samples instead."
         ))
 
     selected_useful = eligible_useful.sample(
