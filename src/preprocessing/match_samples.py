@@ -2,76 +2,79 @@
 
 import pandas as pd
 
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import NearestNeighbors
 
-def create_matched_dataset(
+
+def propensity_score_match(
     df: pd.DataFrame,
-    useful_proportion: float,
-    age_tolerance: float,
-    match_columns: list[str],
+    covariates: list[str],
+    target_col: str = 'label',
+    positive_class: str = 'not-useful',
+    ratio: int = 2,
+    caliper: float = 0.05,
     random_state: int = 42,
     verbose: bool = False
 ) -> pd.DataFrame:
     """
-    Selects useful images that are compatible with not-useful images based on
-    matched list columns and return the two classes concatenated.
-
-    Args:
-        df: DataFrame containing the original data.
-        useful_proportion: desired proportion of useful images in the final df.
-        age_tolerance: maximum allowed difference between ages.
-        match_columns: categorical columns used for matching.
-        random_state: seed to make the sampling reproducible.
-        verbose: whether to print information about the matching process.
+    Performs a 1:N propensity score matching with caliper.
     """
 
-    # Creating useful and not_useful samples.
-    not_useful = df.query("label == 'not-useful'").reset_index(drop=True).copy()
-    useful = df.query("label == 'useful'").reset_index(drop=True).copy()
+    X = pd.get_dummies(data=df[covariates], drop_first=True)
 
-    number_not_useful = len(not_useful)
-    number_useful = round(
-        number_not_useful
-        * useful_proportion
-        / (1 - useful_proportion)
-    )
+    # Minority class.
+    y = (df[target_col] == positive_class).astype(int)
 
     if verbose:
-        print(f"[INFO] not-useful available: {number_not_useful}")
-        print(f"[INFO] useful available: {number_useful}")
+        print(f"[INFO] not-useful available: {int((y == 1).sum())}.")
+        print(f"[INFO] useful available: {int((y == 0).sum())}.")
+        print('[INFO] Fitting logistic regression.')
 
-    # Creating mask for eligible.
-    eligible_mask = useful.apply(
-        lambda useful_row: (
-            (not_useful[match_columns] == useful_row[match_columns]).all(axis=1)
-            & ((not_useful['age'] - useful_row['age']).abs() <= age_tolerance)
-        ).any(),
-        axis=1
-    )
-
-    eligible_useful = useful[eligible_mask]
-
-    number_to_sample = min(number_useful, len(eligible_useful))
-
-    if number_to_sample < number_useful:
-        print((
-            "[WARNING] Not enough useful samples. Using all eligible useful "
-            "samples instead."
-        ))
-
-    selected_useful = eligible_useful.sample(
-        n=number_to_sample,
+    model = LogisticRegression(
+        max_iter=1000,
+        class_weight='balanced',
         random_state=random_state
     )
+    model.fit(X, y)
 
-    # Concatenating two classes.
-    matched_df = (
-        pd.concat([not_useful, selected_useful], ignore_index=True)
+    # Get scores.
+    df = df.copy()
+    df['propensity_score'] = model.predict_proba(X)[:, 1]
+
+    cases = df[y == 1].copy()
+    controls = df[y == 0].copy()
+
+    if verbose:
+        print('[INFO] Matching cases and controls.')
+
+    nn = NearestNeighbors(n_neighbors=ratio)
+    nn.fit(controls[['propensity_score']])
+
+    distances, indices = nn.kneighbors(cases[['propensity_score']])
+
+    matched_control_indices = set()
+
+    for dists, idxs in zip(distances, indices):
+        # Keep only controls less equal than caliper.
+        valid = [
+            idx
+            for dist, idx in zip(dists, idxs)
+            if dist <= caliper
+        ]
+
+        matched_control_indices.update(valid)
+
+    matched_controls = controls.iloc[list(matched_control_indices)]
+
+    output = (
+        pd.concat([cases, matched_controls], ignore_index=True)
+        .drop('propensity_score', axis=1)
         .sample(frac=1, random_state=random_state)
         .reset_index(drop=True)
     )
 
     if verbose:
-        print(f"[INFO] useful selected: {number_to_sample}")
-        print(f"[INFO] Total images: {len(matched_df)}")
+        print(f"[INFO] useful selected: {len(matched_controls)}.")
+        print(f"[INFO] Total images: {len(output)}.")
 
-    return matched_df
+    return output
