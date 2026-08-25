@@ -1,2 +1,4 @@
 # Image data folders.
-data/
+data/demographics
+data/processed
+data/raw
