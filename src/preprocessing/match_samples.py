@@ -38,6 +38,9 @@ def propensity_score_match(
     model.fit(X, y)
 
     # Get scores.
+    if verbose:
+        print('[INFO] Calculating propensity scores.')
+
     df = df.copy()
     df['propensity_score'] = model.predict_proba(X)[:, 1]
 
@@ -45,36 +48,50 @@ def propensity_score_match(
     controls = df[y == 0].copy()
 
     if verbose:
-        print('[INFO] Matching cases and controls.')
+        print('[INFO] Fitting KNN.')
 
     nn = NearestNeighbors(n_neighbors=ratio)
-    nn.fit(controls[['propensity_score']])
+    nn.fit(controls[['propensity_score']].values)
 
-    distances, indices = nn.kneighbors(cases[['propensity_score']])
+    used_controls = set()
+    matched_controls = []
 
-    matched_control_indices = set()
+    if verbose:
+        print('[INFO] Matching cases and controls.')
 
-    for dists, idxs in zip(distances, indices):
-        # Keep only controls less equal than caliper.
-        valid = [
-            idx
-            for dist, idx in zip(dists, idxs)
-            if dist <= caliper
-        ]
+    for _, case in cases.iterrows():
+        # Calculating distance from not-useful to all useful.
+        distances, indices = nn.kneighbors([[case['propensity_score']]])
 
-        matched_control_indices.update(valid)
+        selected = 0
 
-    matched_controls = controls.iloc[list(matched_control_indices)]
+        for dist, idx in zip(distances[0], indices[0]):
+            if dist > caliper:
+                continue
+
+            control_idx = controls.index[idx]
+
+            if control_idx in used_controls:  # useful control already used.
+                continue
+
+            used_controls.add(control_idx)
+            matched_controls.append(control_idx)
+            selected += 1
+
+            if selected == ratio:
+                break
+
+    matched_controls_df = controls.loc[matched_controls]
 
     output = (
-        pd.concat([cases, matched_controls], ignore_index=True)
+        pd.concat([cases, matched_controls_df], ignore_index=True)
         .drop('propensity_score', axis=1)
         .sample(frac=1, random_state=random_state)
         .reset_index(drop=True)
     )
 
     if verbose:
-        print(f"[INFO] useful selected: {len(matched_controls)}.")
-        print(f"[INFO] Total images: {len(output)}.")
+        print(f"[INFO] useful selected: {len(matched_controls)}")
+        print(f"[INFO] Total images: {len(output)}")
 
     return output
