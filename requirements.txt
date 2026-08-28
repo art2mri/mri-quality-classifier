@@ -1,5 +1,7 @@
 pandas==3.0.2
 matplotlib==3.10.9
 seaborn==0.13.2
-monai==1.6.0
+torch==2.11.0
 scikit-learn==1.8.0
+monai==1.6.0
+nibabel==5.4.2
