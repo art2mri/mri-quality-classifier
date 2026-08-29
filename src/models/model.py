@@ -1,3 +1,4 @@
+# type: ignore
 """
 3D MRI classification model factory using MONAI backbones.
 """
