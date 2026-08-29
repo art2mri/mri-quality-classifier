@@ -5,3 +5,7 @@ data/raw
 
 # Github copilot plans.
 plans/
+
+# Python and jupyter stuffs.
+__pycache__/
+notebooks/.ipynb_checkpoints/
