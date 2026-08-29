@@ -28,6 +28,12 @@ def make_train_test_split(
 
     train_idx, test_idx = next(splitter.split(df, groups=df[group_col]))
 
+    train_groups = set(df.loc[train_idx, group_col])
+    test_groups = set(df.loc[test_idx, group_col])
+
+    message = '[WARNING] Leakeage: same group in train and test.'
+    assert train_groups.isdisjoint(test_groups), message
+
     if verbose:
         print(f"[INFO] Train size: {len(train_idx)}.")
         print(f"[INFO] Test size: {len(test_idx)}.")
