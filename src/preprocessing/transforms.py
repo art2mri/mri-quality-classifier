@@ -27,29 +27,26 @@ class EnsureSingleChanneld(mt.MapTransform):
 
 
 def get_transforms(preset: str = 'baseline') -> mt.Compose:
-    """Returnsthe transforms pipeline."""
+    """Returns the transforms pipeline."""
 
     base_transforms = [
         mt.LoadImaged(keys=['image']),
         mt.EnsureChannelFirstd(keys=['image']),
         EnsureSingleChanneld(keys=['image'], channel_idx=0),
         mt.Orientationd(keys=['image'], axcodes='RAS'),
-        mt.ResizeWithPadOrCropd(
-            keys=['image'],
-            spatial_size=(256, 256, 256)
-        ),
         mt.Spacingd(
             keys=['image'],
             pixdim=(1.0, 1.0, 1.0),  # Output voxel spacing.
             mode=['bilinear']
         ),
+        mt.ResizeWithPadOrCropd(keys=['image'], spatial_size=(256, 256, 256)),
         mt.NormalizeIntensityd(keys=['image'], nonzero=True, channel_wise=True)
     ]
 
     # New transformations, such as augmentation, will come here.
 
     base_transforms.append(
-        mt.EnsureTyped(keys=['image'])  # Ensure the input data to be a PyTorch tensor.
+        mt.EnsureTyped(keys=['image'])  # Input should be a PyTorch tensor.
     )
 
     return mt.Compose(transforms=base_transforms)
