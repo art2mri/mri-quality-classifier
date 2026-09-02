@@ -8,7 +8,7 @@ from torch.optim import Optimizer
 
 from monai.data import DataLoader
 
-from src.evaluation.metrics import compute_metrics
+from src.evaluation.metrics import compute_metrics, ClassificationMetrics
 
 
 class MRIQualityTrainer:
@@ -60,11 +60,11 @@ class MRIQualityTrainer:
             inputs = batch['image'].to(self.device)
             targets = batch['label'].to(self.device)
 
-            self.optimizer.zero_grad()
-            logits = self.model(inputs)
-            loss = self.criterion(logits, targets)
-            loss.backward()
-            self.optimizer.step()
+            self.optimizer.zero_grad()  # Zero gradients for every batch.
+            logits = self.model(inputs)  # Make predictions for the batch.
+            loss = self.criterion(logits, targets)  # Compute loss.
+            loss.backward()  # Compute gradients.
+            self.optimizer.step()  # Adjust learning weights.
 
             batch_loss = loss.item()
             total_loss += batch_loss
@@ -85,7 +85,11 @@ class MRIQualityTrainer:
         return mean_loss
 
     @torch.no_grad()
-    def validate(self, verbose: bool = False, log_every: int = 10) -> tuple[float, dict]:
+    def validate(
+        self,
+        verbose: bool = False,
+        log_every: int = 10
+    ) -> tuple[float, ClassificationMetrics]:
         """
         Run one full validation epoch.
 
