@@ -54,6 +54,9 @@ def extract_sagittal_slice(
     img = nib.as_closest_canonical(img=img)  # Reorient to canonical (RAS+).
     data = img.get_fdata()  # Get the raw voxel as a numpy array.
 
+    if data.ndim == 4:
+        data = data[..., 0]
+
     if slice_index is None:
         slice_index = data.shape[0] // 2 + offset
 
