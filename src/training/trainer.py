@@ -308,6 +308,7 @@ class MRIQualityTrainer:
 
         for batch in dataloader:
             inputs = batch['image'].to(self.device)
+            targets = batch['label']
             batch_size = inputs.shape[0]
 
             logits = self.model(inputs)
@@ -320,9 +321,10 @@ class MRIQualityTrainer:
                 else:
                     ids = range(offset, offset + batch_size)
 
-                for sample_id, pred, score in zip(ids, predictions, scores):
+                for sample_id, label, pred, score in zip(ids, targets, predictions, scores):
                     print(
                         f"[PRED] {sample_id} | "
+                        f"label={label.item()} | "
                         f"prediction={pred.item()} | "
                         f"score={score.item():.4f}"
                     )
