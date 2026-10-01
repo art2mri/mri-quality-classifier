@@ -284,29 +284,52 @@ class MRIQualityTrainer:
     def predict(
         self,
         dataloader: DataLoader,
+        sample_ids: list[str] | None = None,
         verbose: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Generate class predictions and positive-class scores for a given
-        dataloader.
+        Generate class predictions and positive-class scores for a given data
+        loader.
+
+        Args:
+            dataloader: DataLoader to run inference on.
+            sample_ids: Optional identifiers (e.g. image paths), in the same
+                order as the dataloader's underlying dataset. Used only for
+                per-sample logging when verbose=True.
         """
         self.model.eval()
 
         all_predictions = []
         all_scores = []
+        offset = 0
 
         if verbose:
             print('[PRED] Starting prediction.')
 
         for batch in dataloader:
             inputs = batch['image'].to(self.device)
+            batch_size = inputs.shape[0]
 
             logits = self.model(inputs)
             scores = torch.softmax(logits, dim=1)[:, 1]
             predictions = torch.argmax(logits, dim=1)
 
+            if verbose:
+                if sample_ids is not None:
+                    ids = sample_ids[offset:offset + batch_size]
+                else:
+                    ids = range(offset, offset + batch_size)
+
+                for sample_id, pred, score in zip(ids, predictions, scores):
+                    print(
+                        f"[PRED] {sample_id} | "
+                        f"prediction={pred.item()} | "
+                        f"score={score.item():.4f}"
+                    )
+
             all_predictions.append(predictions.cpu())
             all_scores.append(scores.cpu())
+            offset += batch_size
 
         predictions = torch.cat(all_predictions)
         scores = torch.cat(all_scores)
