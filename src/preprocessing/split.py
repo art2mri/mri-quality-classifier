@@ -41,12 +41,14 @@ def make_group_split(
     label_col: str = 'label',
     positive_class: str = 'not-useful',
     test_size: float = 0.2,
+    val_size: float = 0.2,
     n_splits: int = 5,
     random_state: int = 42,
     verbose: bool = False
 ) -> dict:
     """
-    Create a group-aware train/test or k-fold split with full image paths.
+    Create a group-aware train/val/test, train/test or k-fold split with full
+    image paths.
     """
     images_dir = Path(images_dir)
 
@@ -55,6 +57,56 @@ def make_group_split(
         test_size=test_size,
         random_state=random_state
     )
+
+    if split_type == 'train_val_test':
+        trainval_idx, test_idx = next(splitter.split(df, groups=df[group_col]))
+
+        trainval_df = df.iloc[trainval_idx]
+        test_df = df.iloc[test_idx]
+
+        relative_val_size = val_size / (1 - test_size)
+        val_splitter = GroupShuffleSplit(
+            n_splits=1,
+            test_size=relative_val_size,
+            random_state=random_state
+        )
+        train_idx, val_idx = next(
+            val_splitter.split(trainval_df, groups=trainval_df[group_col])
+        )
+
+        train = _to_records(
+            df=trainval_df.iloc[train_idx],
+            images_dir=images_dir,
+            image_col=image_col,
+            label_col=label_col,
+            positive_class=positive_class
+        )
+        val = _to_records(
+            df=trainval_df.iloc[val_idx],
+            images_dir=images_dir,
+            image_col=image_col,
+            label_col=label_col,
+            positive_class=positive_class
+        )
+        test = _to_records(
+            df=test_df,
+            images_dir=images_dir,
+            image_col=image_col,
+            label_col=label_col,
+            positive_class=positive_class
+        )
+
+        if verbose:
+            _print_summary('Train', train)
+            _print_summary('Val', val)
+            _print_summary('Test', test)
+
+        return {
+            'split_type': 'train_val_test',
+            'train': train,
+            'val': val,
+            'test': test
+        }
 
     if split_type == 'train_test':
         train_idx, test_idx = next(splitter.split(df, groups=df[group_col]))
@@ -144,4 +196,4 @@ def make_group_split(
             'folds': folds
         }
 
-    raise ValueError("split_type must be 'train_test' or 'kfold'")
+    raise ValueError("split_type must be 'train_val_test, 'train_test' or 'kfold'")
