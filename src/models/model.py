@@ -6,6 +6,7 @@ Factory for 2D and 3D MRI classification models using MONAI backbones.
 from typing import Literal
 import torch.nn as nn
 from monai.networks.nets import resnet18, DenseNet121, EfficientNetBN
+from src.models.vgg import build_vgg16
 
 
 def get_model(
@@ -41,8 +42,15 @@ def get_model(
             in_channels=1,
             num_classes=num_classes,
             pretrained=False
+        ),
+        'vgg16': lambda: build_vgg16(
+            num_classes=num_classes,
+            in_channels=1
         )
     }
+
+    if model_name == 'vgg16' and spatial_dims != 2:
+        raise ValueError("'vgg16' from torchvision only supports spatial_dims=2.")
 
     if model_name not in models:
         raise ValueError(f"Invalid '{model_name}' model.")
