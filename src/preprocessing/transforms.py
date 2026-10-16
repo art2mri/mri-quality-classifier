@@ -13,6 +13,7 @@ class EnsureSingleChanneld(mt.MapTransform):
 
     Args:
         keys: Dictionary keys containing the images to transform.
+        channel_idx: Shape index to be preserved.
     """
 
     def __init__(self, keys: list[str], channel_idx: int = 0) -> None:
@@ -28,40 +29,52 @@ class EnsureSingleChanneld(mt.MapTransform):
         return data
 
 
-class ExtractSagittalSliced(mt.MapTransform):
+class ExtractSagittalRanged(mt.MapTransform):
     """
-    Extracts one sagittal slice from a 3D channel-first image with shape
-    (C, X, Y, Z), converting to a 2D image with shape (C, Y, Z). It assumes
-    `RAS` orientation, so axis 1 (X) always corresponds to the left-right axis.
+    Extract multiple sagittal slices from a 3D channel-first image with shape
+    (C, X, Y, Z), converting each one to a 2D image with shape (C, Y, Z). It
+    assumes `RAS` orientation, so axis 1 (X) always corresponds to the
+    left-right axis.
+
+    This is a multi-sample transform: it receives one dict and returns a list
+    of dicts, one per offset.
 
     Args:
         keys: Dictionary keys containing the images to transform.
-        offset: Offset relative to the central sagittal slice.
+        offsets: Offsets relative to the central sagittal slice, one output
+            sample is generated per offset.
     """
 
-    def __init__(self, keys: list[str], offset: int = 0) -> None:
+    def __init__(self, keys: list[str], offsets: list[int]) -> None:
         super().__init__(keys=keys)
-        self.offset = offset
+        self.offsets = offsets
 
-    def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         data = dict(data)
+        samples = []
 
-        for key in self.keys:
-            volume = data[key]  # Shape (C, X, Y, Z)
-            size_x = volume.shape[1]
+        for offset in self.offsets:
+            sample = dict(data)
 
-            slice_idx = size_x // 2 + self.offset
-            slice_idx = max(0, min(slice_idx, slice_idx - 1))
+            for key in self.keys:
+                volume = data[key]  # Shape (C, X, Y, Z)
+                size_x = volume.shape[1]
 
-            data[key] = volume[:, slice_idx, :, :]
+                slice_idx = size_x // 2 + offset
+                slice_idx = max(0, min(slice_idx, size_x - 1))
 
-        return data
+                sample[key] = volume[:, slice_idx, :, :]
+
+            sample['sagittal_offset'] = offset
+            samples.append(sample)
+
+        return samples
 
 
 def get_transforms(
     preset: str = 'baseline',
     mode: Literal['2d', '3d'] = '3d',
-    sagittal_offset: int = 0
+    sagittal_offsets: list[int] = [0]
 ) -> mt.Compose:
     """
     Build the preprocessing pipeline for 2D or 3D training.
@@ -69,9 +82,10 @@ def get_transforms(
     Args:
         preset: Name of the preprocessing preset. Currently, only `baseline` is
             available.
-        mode: Defines whether the output is 2D or 3D.
-        sagittal_offset: Offset from the central sagittal slice. It is used
-            only when `mode='2d'`.
+        mode: Defines whether the output is a 2D or 3D image.
+        sagittal_offset: Offsets from the central sagittal slice, each one
+            generating a separate 2D sample. It is used onlye when
+            `mode='2d'`.
     """
 
     transforms = [
@@ -99,13 +113,15 @@ def get_transforms(
         )
     else:
         transforms.extend([
-            ExtractSagittalSliced(keys=['image'], offset=sagittal_offset),
-            mt.ResizeWithPadOrCropd(keys=['image'], spatial_size=(256, 256))
+            ExtractSagittalRanged(keys=['image'], offsets=sagittal_offsets),
+            mt.ResizeWithPadOrCropd(keys='image', spatial_size=(256, 256))
         ])
 
     transforms.extend([
         # Normalizing with z-score.
         mt.NormalizeIntensityd(keys=['image'], nonzero=True, channel_wise=True),
+
+        # Ensuring to be a PyTorch tensor.
         mt.EnsureTyped(keys=['image'])
     ])
 
