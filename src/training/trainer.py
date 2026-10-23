@@ -1,8 +1,10 @@
-"""Trainer class."""
+# type: ignore
+"""Training module."""
 
-import pandas as pd
+import random
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Optimizer
@@ -34,8 +36,11 @@ class MRIQualityTrainer:
         accumulation_steps: Gradient steps to simulate larger batch sizes.
         scheduler: Optional learning rate scheduler, stepped with loss_val
             every epoch.
+        grad_clip_norm: Optional max gradient norm to clip exploding gradients
+            before each optimizer step when set.
         device: Compute device, e.g., 'cpu' or 'cuda'.
         monitor_metric: Metric used to track and save the best model.
+        seed: Optional seed for torch/numpy/random, for reproducible runs.
     """
 
     def __init__(
@@ -49,9 +54,14 @@ class MRIQualityTrainer:
         log_dir: str | Path,
         accumulation_steps: int = 1,
         scheduler: ReduceLROnPlateau | None = None,
+        grad_clip_norm: float | None = None,
         device: str | torch.device = 'cpu',
-        monitor_metric: str = 'auc'
+        monitor_metric: str = 'f1',
+        seed: int | None = None
     ) -> None:
+        if seed is not None:
+            self._set_seed(seed=seed)
+
         self.device = torch.device(device=device)
         self.model = model.to(device=self.device)
         self.train_loader = train_loader
@@ -60,6 +70,7 @@ class MRIQualityTrainer:
         self.criterion = criterion
         self.accumulation_steps = accumulation_steps
         self.scheduler = scheduler
+        self.grad_clip_norm = grad_clip_norm
         self.monitor_metric = monitor_metric
         self.checkpoint_dir = Path(checkpoint_dir)
         self.writer = SummaryWriter(log_dir=str(log_dir))
@@ -70,8 +81,28 @@ class MRIQualityTrainer:
             'metrics': []
         }
 
-    def train_one_epoch(self, log_every: int = 10, verbose: bool = False) -> float:
-        """Run one training epoch with gradient accumulation steps."""
+    def _set_seed(self, seed: int) -> None:
+        """Seed torch/numpy/random and disable cuDNN non-determinism."""
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+    def _save_weights(self, suffix: str) -> Path:
+        """Save the current model weights."""
+        checkpoint_path = self.checkpoint_dir / f"{self.model._get_name()}_{suffix}.pt"  # noqa: E501
+        torch.save(obj=self.model.state_dict(), f=checkpoint_path)
+
+        return checkpoint_path
+
+    def train_one_epoch(
+        self,
+        log_every: int = 10,
+        verbose: bool = False
+    ) -> float:
+        """Run one training epoch."""
         self.model.train()
 
         total_loss = 0.0
@@ -83,6 +114,7 @@ class MRIQualityTrainer:
 
         self.optimizer.zero_grad()  # Zero grads once, before accumulating.
 
+        # Batch training loop.
         for batch_idx, batch in enumerate(self.train_loader, start=1):
             inputs = batch['image'].to(self.device)
             targets = batch['label'].to(self.device)
@@ -96,6 +128,13 @@ class MRIQualityTrainer:
             is_last_batch = batch_idx == num_train_batches
 
             if (batch_idx % self.accumulation_steps == 0) or is_last_batch:
+                if self.grad_clip_norm is not None:
+                    # Caps the global grad norm, guarding against exploding grads.  # noqa: E501
+                    torch.nn.utils.clip_grad_norm_(
+                        parameters=self.model.parameters(),
+                        max_norm=self.grad_clip_norm
+                    )
+
                 self.optimizer.step()  # Apply accumulated grads.
                 self.optimizer.zero_grad()
 
@@ -175,7 +214,11 @@ class MRIQualityTrainer:
         mean_loss = total_loss / max(num_batches, 1)
 
         if verbose:
-            print(f"[VAL] Finished | mean_loss={mean_loss:.4f} | metrics={metrics}")
+            print(
+                f"[VAL] Finished | "
+                f"mean_loss={mean_loss:.4f} | "
+                f"metrics={metrics}"
+            )
 
         return mean_loss, metrics
 
@@ -183,16 +226,18 @@ class MRIQualityTrainer:
         self,
         num_epochs: int,
         patience: int | None = None,
+        log_every: int = 10,
         batch_verbose: bool = False,
         verbose: bool = False
     ) -> dict:
         """
-        Train the model for multiple epochs and save the best checkpoint.
+        Train the model for multiple epochs, saving both the best and the last
+        checkpoints.
 
         Args:
-            num_epochs: number of max epochs.
-            patience: stop early after this many epochs without improvement
-                in `monitor_metric`. None disables early stopping.
+            num_epochs: Number of max epochs.
+            patience: Stop early after this many epochs without improvement in
+                `monitor_metrics`. None disables early stopping.
         """
         if verbose:
             print(f"[FIT] Starting training for {num_epochs} epochs.")
@@ -206,21 +251,20 @@ class MRIQualityTrainer:
             if verbose:
                 print(f"[FIT] Epoch {epoch}/{num_epochs}")
 
-            # One single epoch passes over the entire train dataloader. After
-            # that, it validates over the entire val dataloader.
-            train_loss = self.train_one_epoch(verbose=batch_verbose)
-            val_loss, metrics = self.validate(verbose=batch_verbose)
+            # One single epoch passes over the train dataloader using
+            # batches and validates over the entire val dataloader.
+            train_loss = self.train_one_epoch(log_every=log_every, verbose=batch_verbose)  # noqa: E501
+            val_loss, metrics = self.validate(log_every=log_every, verbose=batch_verbose)  # noqa: E501
 
             self.history['train_loss'].append(train_loss)
             self.history['val_loss'].append(val_loss)
             self.history['metrics'].append(metrics)
 
-            # Scheduler reacts to val_loss and it may lower the learning rate
-            # if it stalls.
+            # Lower the learning rate if the val_loss stalls.
             if self.scheduler is not None:
                 self.scheduler.step(val_loss)
 
-            # Add TensorBoard logs.
+            # TensorBoard logs.
             self.writer.add_scalars(
                 'loss',
                 {'train': train_loss, 'val': val_loss},
@@ -234,23 +278,23 @@ class MRIQualityTrainer:
 
             score = metrics[self.monitor_metric]  # Get the epoch score.
 
-            # Checkpointing and early-stopping bookkeeping.
+            # Checkpointing and early-stopping bookkepping.
             if score > self.best_score:
                 self.best_score = score
                 epochs_without_improvement = 0
 
-                torch.save(
-                    obj=self.model.state_dict(),
-                    f=self.checkpoint_dir / f"{self.model._get_name()}_best_model.pt"
-                )
+                best_path = self._save_weights(suffix='best_model')
 
                 if verbose:
                     print(
-                        f"[FIT] New best model saved | "
+                        f"[FIT] New best model saved to {best_path} | "
                         f"{self.monitor_metric}={score:.4f}"
                     )
             else:
                 epochs_without_improvement += 1
+
+            # Always overwrite the last-epoch checkpoint.
+            _ = self._save_weights(suffix='last_model')
 
             if verbose:
                 print(
@@ -267,79 +311,12 @@ class MRIQualityTrainer:
                         f"[FIT] Early stopping at epoch {epoch} "
                         f"(no improvement in {patience} epochs)."
                     )
-
                 break
 
         # Close TensorBoard to ensure all info will be saved on disk.
         self.writer.close()
 
-        # I WILL SAVE SOME LOG DATASET HERE.
-
         if verbose:
             print('[FIT] Training finished.')
 
         return self.history
-
-    @torch.no_grad()
-    def predict(
-        self,
-        dataloader: DataLoader,
-        sample_ids: list[str] | None = None,
-        verbose: bool = False
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Generate class predictions and positive-class scores for a given data
-        loader.
-
-        Args:
-            dataloader: DataLoader to run inference on.
-            sample_ids: Optional identifiers (e.g. image paths), in the same
-                order as the dataloader's underlying dataset. Used only for
-                per-sample logging when verbose=True.
-        """
-        self.model.eval()
-
-        all_predictions = []
-        all_scores = []
-        offset = 0
-
-        if verbose:
-            print('[PRED] Starting prediction.')
-
-        for batch in dataloader:
-            inputs = batch['image'].to(self.device)
-            targets = batch['label']
-            batch_size = inputs.shape[0]
-
-            logits = self.model(inputs)
-            scores = torch.softmax(logits, dim=1)[:, 1]
-            predictions = torch.argmax(logits, dim=1)
-
-            if verbose:
-                if sample_ids is not None:
-                    ids = sample_ids[offset:offset + batch_size]
-                else:
-                    ids = range(offset, offset + batch_size)
-
-                for sample_id, label, pred, score in zip(ids, targets, predictions, scores):
-                    print(
-                        f"[PRED] {sample_id} | "
-                        f"label={label.item()} | "
-                        f"prediction={pred.item()} | "
-                        f"score={score.item():.4f}"
-                    )
-
-            all_predictions.append(predictions.cpu())
-            all_scores.append(scores.cpu())
-            offset += batch_size
-
-        predictions = torch.cat(all_predictions)
-        scores = torch.cat(all_scores)
-
-        if verbose:
-            print('[PRED] Prediction finished.')
-
-        return predictions, scores
-
-    def save_dict(self, verbose: bool = False) -> None:
-        pass
