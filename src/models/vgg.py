@@ -1,3 +1,4 @@
+# type: ignore
 """VGG backbone from torchvision, adapted for single-channel 2D input."""
 
 import torch.nn as nn
