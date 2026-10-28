@@ -8,3 +8,4 @@ nibabel==5.4.2
 tensorboard==2.21.0
 pillow==12.2.0
 torchvision==0.29.1
+einops==0.8.2

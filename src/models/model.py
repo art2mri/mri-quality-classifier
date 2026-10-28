@@ -4,33 +4,40 @@ Factory for 2D and 3D MRI classification models using MONAI backbones.
 """
 
 from typing import Literal
+
 import torch.nn as nn
+from src.models.vit import build_vit
+from src.models.vgg import build_vgg16
 from monai.networks.nets import resnet18, DenseNet121, EfficientNetBN
 
-from src.models.vgg import build_vgg16
-from src.models.vit import build_vit
+Models = Literal[
+    'densenet121', 'resnet18', 'efficientnet-b0', 'vgg16', 'vit'
+]
 
 
 def get_model(
-    model_name: str,
+    model_name: Models,
     num_classes: int = 2,
     spatial_dims: Literal[2, 3] = 3
 ) -> nn.Module:
     """
-    Returns a MONAI classification model.
+    Build a MRI classification model.
+
+    All models return raw logits, without the application of softmax. These
+    logits can be used directly with `torch.nn.CrossEntropyLoss`.
 
     Args:
         model_name: Name of the architecture to use.
-        num_classes: Number of output classes.
-        spatial_dims: Number of spatial dimensions used by the model. 2 is used
-            for 2D images with shape `(C, H, W)` and 3 is used for 3D images
-            with shape `(C, D, H, W)`.
+        num_classes: Number of output classes. Currently, only `2` is accepted.
+        spatial_dims: Number of spatial dimensions used by the model. `2` is
+            used for 2D images with shape `(C, H, W)` and `3` is used for 3D
+            images with shape `(C, D, H, W)`.
     """
 
     models = {
         'densenet121': lambda: DenseNet121(
             spatial_dims=spatial_dims,
-            in_channels=1,
+            in_channels=1,  # MRI has only 1 channel.
             out_channels=num_classes
         ),
         'resnet18': lambda: resnet18(
@@ -52,18 +59,12 @@ def get_model(
         'vit': lambda: build_vit(
             num_classes=num_classes,
             in_channels=1,
-            img_size=(256, 256, 256),
-            patch_size=(32, 32, 32),
             spatial_dims=spatial_dims
         )
     }
 
     if model_name == 'vgg16' and spatial_dims != 2:
-        raise ValueError("'vgg16' from torchvision only supports spatial_dims=2.")
-
-    if model_name == 'vit' and spatial_dims != 3:
-        raise ValueError("'vit' is configured for spatial_dims=3 only.")
-
+        raise ValueError("'vgg16' only supports spatial_dims=2.")
     if model_name not in models:
         raise ValueError(f"Invalid '{model_name}' model.")
 
