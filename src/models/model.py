@@ -6,13 +6,15 @@ from typing import Literal
 import torch.nn as nn
 from src.models.vit import build_vit
 from src.models.vgg import build_vgg16
-from monai.networks.nets import resnet18, DenseNet121, EfficientNetBN
+from src.models.resnet import build_resnet18
+from monai.networks.nets import DenseNet121, EfficientNetBN
 
 Models = Literal[
     'densenet121', 'resnet18', 'efficientnet-b0', 'vgg16', 'vit'
 ]
 
 PRETRAINED_2D_MODELS = {'densenet121', 'efficientnet-b0', 'vgg16'}
+PRETRAINED_3D_MODELS = {'resnet18'}
 
 
 def get_model(
@@ -35,7 +37,9 @@ def get_model(
     """
     if pretrained and model_name in PRETRAINED_2D_MODELS and spatial_dims != 2:
         raise ValueError(f"'{model_name}' only supports pretrained weights when spatial_dims=2.")
-    if pretrained and model_name not in PRETRAINED_2D_MODELS:
+    if pretrained and model_name in PRETRAINED_3D_MODELS and spatial_dims != 3:
+        raise ValueError(f"'{model_name}' only supports pretrained weights when spatial_dims=3.")
+    if pretrained and model_name not in (PRETRAINED_2D_MODELS | PRETRAINED_3D_MODELS):
         raise ValueError(f"'{model_name}' does not support pretrained weights.")
 
     models = {
@@ -45,10 +49,11 @@ def get_model(
             out_channels=num_classes,
             pretrained=pretrained
         ),
-        'resnet18': lambda: resnet18(
+        'resnet18': lambda: build_resnet18(
             spatial_dims=spatial_dims,
-            n_input_channels=1,
-            num_classes=num_classes
+            in_channels=1,
+            num_classes=num_classes,
+            pretrained=pretrained
         ),
         'efficientnet-b0': lambda: EfficientNetBN(
             model_name='efficientnet-b0',

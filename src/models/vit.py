@@ -44,7 +44,7 @@ def build_vit(
     and be divisible by `patch_size`.
 
     Args:
-        num_classes: Number of input classes.
+        num_classes: Number of output classes.
         in_channels: Number of input channels in the MRI image.
         spatial_dims: Number of spatial dimensions used by the model. `2` is
             used for 2D images and `3` for 3D images.
