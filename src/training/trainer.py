@@ -1,4 +1,3 @@
-# type: ignore
 """Training module."""
 
 import random
@@ -22,8 +21,8 @@ from src.evaluation.metrics import (
 
 class MRIQualityTrainer:
     """
-    Trainer class for MRI quality classification models. It set up model, data
-    loaders, optimizer, loss, logging, and checkpoint.
+    Trainer class for MRI quality classification models. It set up model, train
+    and val data loaders, optimizer, loss, logging, and checkpoint.
 
     Args:
         model: PyTorch model to train.
@@ -33,14 +32,16 @@ class MRIQualityTrainer:
         criterion: Loss function.
         checkpoint_dir: Directory where checkpoints will be saved.
         log_dir: Directory for TensorBoard logs.
-        accumulation_steps: Gradient steps to simulate larger batch sizes.
+        accumulation_steps: Gradient steps to simulate larger batch sizes. `1`
+            means no accumulation.
         scheduler: Optional learning rate scheduler, stepped with loss_val
             every epoch.
         grad_clip_norm: Optional max gradient norm to clip exploding gradients
             before each optimizer step when set.
         device: Compute device, e.g., 'cpu' or 'cuda'.
-        monitor_metric: Metric used to track and save the best model.
-        seed: Optional seed for torch/numpy/random, for reproducible runs.
+        monitor_metric: Metric used to track and save the best model. `f1` by
+            default.
+        seed: Seed for torch/numpy/random, for reproducible runs.
     """
 
     def __init__(
@@ -57,11 +58,9 @@ class MRIQualityTrainer:
         grad_clip_norm: float | None = None,
         device: str | torch.device = 'cpu',
         monitor_metric: str = 'f1',
-        seed: int | None = None
+        seed: int = 42
     ) -> None:
-        if seed is not None:
-            self._set_seed(seed=seed)
-
+        self._set_seed(seed=seed)
         self.device = torch.device(device=device)
         self.model = model.to(device=self.device)
         self.train_loader = train_loader
@@ -92,7 +91,7 @@ class MRIQualityTrainer:
 
     def _save_weights(self, suffix: str) -> Path:
         """Save the current model weights."""
-        checkpoint_path = self.checkpoint_dir / f"{self.model._get_name()}_{suffix}.pt"  # noqa: E501
+        checkpoint_path = self.checkpoint_dir / f"{self.model._get_name()}_{suffix}.pt"  # noqa
         torch.save(obj=self.model.state_dict(), f=checkpoint_path)
 
         return checkpoint_path
@@ -102,7 +101,7 @@ class MRIQualityTrainer:
         log_every: int = 10,
         verbose: bool = False
     ) -> float:
-        """Run one training epoch."""
+        """Run one training epoch and returns the train loader mean loss."""
         self.model.train()
 
         total_loss = 0.0
@@ -114,7 +113,7 @@ class MRIQualityTrainer:
 
         self.optimizer.zero_grad()  # Zero grads once, before accumulating.
 
-        # Batch training loop.
+        # Batch training loop. It calculates the loss for each batch.
         for batch_idx, batch in enumerate(self.train_loader, start=1):
             inputs = batch['image'].to(self.device)
             targets = batch['label'].to(self.device)
@@ -129,7 +128,7 @@ class MRIQualityTrainer:
 
             if (batch_idx % self.accumulation_steps == 0) or is_last_batch:
                 if self.grad_clip_norm is not None:
-                    # Caps the global grad norm, guarding against exploding grads.  # noqa: E501
+                    # Caps the global grad norm, guarding against exploding grads.  # noqa
                     torch.nn.utils.clip_grad_norm_(
                         parameters=self.model.parameters(),
                         max_norm=self.grad_clip_norm
@@ -237,7 +236,7 @@ class MRIQualityTrainer:
         Args:
             num_epochs: Number of max epochs.
             patience: Stop early after this many epochs without improvement in
-                `monitor_metrics`. None disables early stopping.
+                `monitor_metric`. None disables early stopping.
         """
         if verbose:
             print(f"[FIT] Starting training for {num_epochs} epochs.")
@@ -251,10 +250,10 @@ class MRIQualityTrainer:
             if verbose:
                 print(f"[FIT] Epoch {epoch}/{num_epochs}")
 
-            # One single epoch passes over the train dataloader using
-            # batches and validates over the entire val dataloader.
-            train_loss = self.train_one_epoch(log_every=log_every, verbose=batch_verbose)  # noqa: E501
-            val_loss, metrics = self.validate(log_every=log_every, verbose=batch_verbose)  # noqa: E501
+            # One single epoch passes over the train loader using batches and
+            # validates over the entire val dataloader.
+            train_loss = self.train_one_epoch(log_every=log_every, verbose=batch_verbose)  # noqa
+            val_loss, metrics = self.validate(log_every=log_every, verbose=batch_verbose)  # noqa
 
             self.history['train_loss'].append(train_loss)
             self.history['val_loss'].append(val_loss)
@@ -272,9 +271,7 @@ class MRIQualityTrainer:
             )
             for name, value in scalar_metrics(metrics=metrics).items():
                 self.writer.add_scalar(f"val/{name}", value, epoch)
-            self.writer.add_scalar(
-                'lr', self.optimizer.param_groups[0]['lr'], epoch
-            )
+            self.writer.add_scalar('lr', self.optimizer.param_groups[0]['lr'], epoch)  # noqa
 
             score = metrics[self.monitor_metric]  # Get the epoch score.
 
